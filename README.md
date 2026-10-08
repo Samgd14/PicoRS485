@@ -45,7 +45,7 @@ board     = pico
 framework = picosdk
 
 ; This library is not in the PlatformIO registry, so get it directly from GitHub
-lib_deps = https://github.com/Samgd14/PicoRS485_dev2.git
+lib_deps = https://github.com/Samgd14/PicoRS485.git
 
 ; Use build flags to change library compile settings
 build_flags =

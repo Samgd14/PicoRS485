@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
+project(PicoRS485 VERSION 0.1.0 LANGUAGES C CXX ASM)
 
 # The SDK is normally found through PICO_SDK_PATH in the environment (the VS Code
 # extension and the SDK's own setup script both set it); -DPICO_SDK_PATH=... works

@@ -1,6 +1,9 @@
 {
   "name": "PicoRS485",
   "version": "0.1.0",
+  "repository": { "type": "git", "url": "https://github.com/Samgd14/PicoRS485.git" },
+  "homepage": "https://github.com/Samgd14/PicoRS485",
+  "authors": { "name": "Sami Ghoul-Duclos" },
   "description": "Half-duplex RS-485 channel for RP2040 and RP2350, driven by four PIO state machines and two DMA channels",
   "keywords": "rs485, rs-485, serial, uart, rp2040, rp2350, raspberry-pi-pico",
   "license": "MIT",
