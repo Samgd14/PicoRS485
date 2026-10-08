@@ -124,7 +124,7 @@ The firmware is configured for RP2040 (`-DPICO_BOARD=pico`). The RP2350 code pat
 
 ## The mutation corpus
 
-`test/build/review_mut.ps1` (git-ignored) regenerates mutants by text substitution on the driver and the header, compiles each against the host suite, and reports KILLED, SURVIVED, NOT-APPLIED or HANG. It runs every mutant with the Windows error dialog suppressed. A few of them fault on purpose.
+`test/mutation_corpus.ps1` regenerates mutants by text substitution on the driver and the header, compiles each against the host suite, and reports KILLED, SURVIVED, NOT-APPLIED or HANG. It runs every mutant with the Windows error dialog suppressed. A few of them fault on purpose.
 
 Two things to expect. Some anchors describe code that no longer exists and report NOT-APPLIED. That is the corpus's own debt, not a gap in the suite. A few mutants are equivalent: the suite cannot kill them because the mutation has no observable effect. That is worth checking before treating a survivor as a missing test.
 
@@ -132,4 +132,4 @@ Two things to expect. Some anchors describe code that no longer exists and repor
 
 1. `pwsh test/run_tests.ps1` - the host suite on both pin-mask bases, the RP2040/RP2350A syntax build, the `.pio` helper assembly and the doxygen check. It builds no firmware: the two-board build is the separate `cmake --build build-hw`.
 2. The bench, which needs both boards, an idle host and a shell that can run the Pico SDK build.
-3. `pwsh test/build/review_mut.ps1` - the corpus, several minutes.
+3. `pwsh test/mutation_corpus.ps1` - the corpus, several minutes.
