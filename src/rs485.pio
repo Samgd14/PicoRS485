@@ -1,0 +1,242 @@
+; PIO UART engine for RS-485 half-duplex
+
+; =================================== TX ===================================
+.program rs485_tx
+.side_set 1 opt
+; NOTE: 1-bit optional side-set uses 2 bits from the 5-bit delay field
+; = max delay on any instruction is [7]
+; Y = char_bits - 1, where char_bits = 1 + data + parity + stop
+; IRQ 4 = character complete, IRQ 5 = inter-character gap complete (cleared on wait)
+; IRQ 0 = burst complete: raised with the DE drop on the last character
+; The bit above the character in each FIFO word says whether that character is the
+; last of the burst, and DE is held from the first character to that one.
+
+.wrap_target
+    pull block           ; block until a word is available
+    mov x, y side 1 [7]  ; reset bit counter and assert DE 1 bit time ahead of the start bit
+bitloop:
+    out pins, 1 [6]      ; send the next bit
+    jmp x-- bitloop      ; loop until all bits are sent
+    irq set 4 [7]        ; character complete (stop bit just ended) -> start gap timer, wait one bit time
+    out x, 1             ; set x to end-of-burst marker bit
+    jmp !x not_last      ; not the last character -> keep DE high
+    irq set 0 side 0     ; last character -> burst over, DE low, the TX machine's IRQ to the CPU
+not_last:
+    wait 1 irq 5         ; block until the gap timer is done
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+// Pins past 31 need the 64-bit mask form; 1u << 40 is undefined.
+
+static inline int rs485_tx_program_init(PIO pio, uint sm, uint offset,
+                                        uint pin_tx, uint pin_de,
+                                        uint clkdiv_int, uint8_t clkdiv_frac8,
+                                        uint char_bits)
+{
+    // Initialize TX pin before starting the state machine
+    pio_sm_set_pins_with_mask64(pio, sm, 1ull << pin_tx, 1ull << pin_tx);
+    int rc = pio_sm_set_consecutive_pindirs(pio, sm, pin_tx, 1, true);
+    if (rc != PICO_OK) return rc;
+    pio_gpio_init(pio, pin_tx);
+
+    // Initialize DE pin before starting the state machine
+    pio_sm_set_pins_with_mask64(pio, sm, 0u, 1ull << pin_de);
+    rc = pio_sm_set_consecutive_pindirs(pio, sm, pin_de, 1, true);
+    if (rc != PICO_OK) return rc;
+    pio_gpio_init(pio, pin_de);
+
+    // PIO state machine config
+    pio_sm_config conf = rs485_tx_program_get_default_config(offset);
+    sm_config_set_out_pins(&conf, pin_tx, 1);              // TX pin = output
+    sm_config_set_sideset_pins(&conf, pin_de);             // DE pin = sideset
+    sm_config_set_out_shift(&conf, true, false, 32);       // shift right, autopull OFF
+    sm_config_set_fifo_join(&conf, PIO_FIFO_JOIN_TX);      // 8-deep TX FIFO
+    sm_config_set_clkdiv_int_frac8(&conf, clkdiv_int, clkdiv_frac8);
+
+    // initialize the state machine with the config
+    rc = pio_sm_init(pio, sm, offset, &conf);
+    if (rc != PICO_OK) return rc;
+
+    // Set Y as (per-character bit count - 1)
+    pio_sm_exec(pio, sm, pio_encode_set(pio_y, char_bits - 1));
+
+    // Enable the state machine
+    pio_sm_set_enabled(pio, sm, true);
+    return PICO_OK;
+}
+
+// Set Y as (per-character bit count - 1); applies from the next character
+static inline void rs485_tx_set_char_bits(PIO pio, uint sm, uint char_bits) {
+    pio_sm_exec(pio, sm, pio_encode_set(pio_y, char_bits ? char_bits - 1u : 0u));
+}
+%}
+
+
+; =============================== TX Gap Timer ==============================
+.program rs485_txgap
+; Y = gap_bits - 1. The counter counts down, so gap_bits must be at least one.
+; IRQ 4 = character complete (cleared on wait), IRQ 5 = inter-character gap complete
+
+.wrap_target
+    wait 1 irq 4        ; wait until the character is complete
+    mov x, y            ; reset the gap bit count
+count:
+    jmp x-- count [7]   ; loop until all gap bit times have elapsed
+    irq set 5           ; gap elapsed -> release the TX state machine
+.wrap
+
+% c-sdk {
+static inline int rs485_txgap_program_init(PIO pio, uint sm, uint offset,
+                                           uint clkdiv_int, uint8_t clkdiv_frac8,
+                                           uint gap_bits)
+{
+    // PIO state machine config
+    pio_sm_config c = rs485_txgap_program_get_default_config(offset);
+    sm_config_set_clkdiv_int_frac8(&c, clkdiv_int, clkdiv_frac8);
+
+    // Initialize the state machine with the config
+    int rc = pio_sm_init(pio, sm, offset, &c);
+    if (rc != PICO_OK) return rc;
+
+    // Y = gap_bits - 1: the loop counts down, so a zero gap cannot be expressed.
+    pio_sm_exec(pio, sm, pio_encode_set(pio_y, gap_bits - 1u));
+
+    // Enable the state machine
+    pio_sm_set_enabled(pio, sm, true);
+    return PICO_OK;
+}
+
+// Set Y as gap bits count less one; applies from the next gap
+static inline void rs485_txgap_set_gap_bits(PIO pio, uint sm, uint gap_bits) {
+    pio_sm_exec(pio, sm, pio_encode_set(pio_y, gap_bits - 1u));
+}
+%}
+
+
+; =================================== RX ===================================
+.program rs485_rx
+.side_set 1 opt
+; Y = isr_bits - 2, where isr_bits = data_bits + parity_bits + 1
+; Autopush with threshold = isr_bits is required
+; pin_rx_act is side-set: high while a character is being received (ends 0.5 bit time early)
+
+.wrap_target
+reset:
+    nop side 0          ; no character in flight
+    wait 0 pin 0        ; wait for start-bit edge
+    nop [1] side 1      ; 2 cycles: puts the start-bit check below mid-bit; activity goes high
+    jmp pin reset       ; if still high -> not a start bit -> reset
+    mov x, y [5]        ; reset per-character bit counter
+bitloop:
+    in pins, 1          ; sample the next data bit
+    jmp x-- bitloop [6] ; loop until all bits are sampled
+    nop side 0          ; character done: drop activity BEFORE the last sample
+    in pins, 1          ; sample last bit; autopush stalls here if the FIFO is full
+.wrap
+; Load-bearing order: the final `in` is the autopush and stalls on a full FIFO, so activity
+; is dropped before it, never at the wrap.
+
+% c-sdk {
+static inline int rs485_rx_program_init(PIO pio, uint sm, uint offset,
+                                        uint pin_rx, uint pin_rx_act,
+                                        uint clkdiv_int, uint8_t clkdiv_frac8,
+                                        uint isr_bits)
+{
+    // Initialize RX pin
+    int rc = pio_sm_set_consecutive_pindirs(pio, sm, pin_rx, 1, false);
+    if (rc != PICO_OK) return rc;
+    pio_gpio_init(pio, pin_rx);
+    gpio_pull_up(pin_rx);
+
+    // Initialize RX activity pin
+    pio_sm_set_pins_with_mask64(pio, sm, 0u, 1ull << pin_rx_act);
+    rc = pio_sm_set_consecutive_pindirs(pio, sm, pin_rx_act, 1, true);
+    if (rc != PICO_OK) return rc;
+    pio_gpio_init(pio, pin_rx_act);
+
+    // PIO state machine config
+    pio_sm_config c = rs485_rx_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, pin_rx);                    // for `wait` / `in`
+    sm_config_set_jmp_pin(&c, pin_rx);                    // for `jmp pin`
+    sm_config_set_sideset_pins(&c, pin_rx_act);           // activity is side-set
+    sm_config_set_in_shift(&c, true, true, isr_bits);     // right, AUTOPUSH, =K
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);        // 8-deep RX FIFO
+    sm_config_set_clkdiv_int_frac8(&c, clkdiv_int, clkdiv_frac8);
+
+    // Initialize the state machine with the config
+    rc = pio_sm_init(pio, sm, offset, &c);
+    if (rc != PICO_OK) return rc;
+
+    // Set Y as (ISR bit count - 2)
+    pio_sm_exec(pio, sm, pio_encode_set(pio_y, isr_bits > 1u ? isr_bits - 2u : 0u));
+
+    // The caller arms the RX channel before this runs, so nothing here blocks on a full FIFO.
+    pio_sm_set_enabled(pio, sm, true);
+    return PICO_OK;
+}
+
+// Set Y as (ISR bit count - 2) and the autopush threshold
+// Only call between characters since it touches the FIFO
+static inline void rs485_rx_set_isr_bits(PIO pio, uint sm, uint isr_bits) {
+    // Y is what each character's sample counter reloads from. An injected exec replaces one that has
+    // not run yet, so this one waits; the threshold below takes effect as written.
+    pio_sm_exec_wait_blocking(pio, sm, pio_encode_set(pio_y, isr_bits > 1u ? isr_bits - 2u : 0u));
+    hw_write_masked(&pio->sm[sm].shiftctrl,
+                    (isr_bits & 0x1fu) << PIO_SM0_SHIFTCTRL_PUSH_THRESH_LSB,
+                    PIO_SM0_SHIFTCTRL_PUSH_THRESH_BITS);
+}
+%}
+
+
+; ============================= RX Idle Timer ==============================
+.program rs485_rxidle
+; Y = steps - 1, one step being two bit times
+; IRQ 1 is raised after Y + 1 steps with no character in flight: the RX machine's own IRQ
+; pin_rx_act is used to determine if the receiver is active
+
+.wrap_target
+start:
+    wait 1 pin 0        ; a character started (RX activity high)
+    wait 0 pin 0        ; ...and finished (RX activity low)
+    mov x, y            ; reset per-window step counter
+count:
+    jmp pin start       ; activity high again -> new character -> re-arm
+    nop [6]             ; 7 cycles
+    jmp pin start       ; second sample, one bit time after the first
+    jmp x-- count [6]   ; 7 cycles: 16 per step, so the pin is checked once per bit time
+    irq 1               ; the window elapsed with no character -> end of burst, raise IRQ
+.wrap
+
+% c-sdk {
+// RX state machine must be initialized before this one (RX activity pin config)
+// steps: the window count, one step being two bit times. The driver rounds up.
+static inline int rs485_rxidle_program_init(PIO pio, uint sm, uint offset,
+                                           uint pin_rx_act, uint clkdiv_int,
+                                           uint8_t clkdiv_frac8, uint steps)
+{
+    // PIO state machine config
+    pio_sm_config c = rs485_rxidle_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, pin_rx_act);
+    sm_config_set_jmp_pin(&c, pin_rx_act);
+    sm_config_set_clkdiv_int_frac8(&c, clkdiv_int, clkdiv_frac8);
+
+    // Initialize the state machine with the config
+    int rc = pio_sm_init(pio, sm, offset, &c);
+    if (rc != PICO_OK) return rc;
+
+    // Set Y as (steps - 1)
+    pio_sm_exec(pio, sm, pio_encode_set(pio_y, steps - 1));
+
+    // Enable the state machine
+    pio_sm_set_enabled(pio, sm, true);
+    return PICO_OK;
+}
+
+// Set Y as (steps - 1); applies from the next window
+static inline void rs485_rxidle_set_steps(PIO pio, uint sm, uint steps) {
+    pio_sm_exec(pio, sm, pio_encode_set(pio_y, steps ? steps - 1u : 0u));
+}
+%}

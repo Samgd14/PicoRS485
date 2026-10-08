@@ -1,0 +1,18 @@
+{
+  "name": "PicoRS485",
+  "version": "0.1.0",
+  "description": "Half-duplex RS-485 channel for RP2040 and RP2350, driven by four PIO state machines and two DMA channels",
+  "keywords": "rs485, rs-485, serial, uart, rp2040, rp2350, raspberry-pi-pico",
+  "license": "MIT",
+  "platforms": "raspberrypi",
+  "frameworks": "*",
+  "build": {
+    "includeDir": "include"
+  },
+  "export": {
+    "exclude": [
+      "build-hw",
+      "test/build"
+    ]
+  }
+}

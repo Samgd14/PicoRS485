@@ -1,0 +1,17 @@
+PROJECT_NAME           = PicoRS485
+INPUT                  = ../include/PicoRS485.h
+INCLUDE_PATH           = stub
+OUTPUT_DIRECTORY       = build/doxygen
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = YES
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+GENERATE_MAN           = NO
+PREDEFINED             = PICO_PIO_USE_GPIO_BASE=1
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
