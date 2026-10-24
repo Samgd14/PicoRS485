@@ -35,3 +35,5 @@
 # Firmware build tree and its configure/build log (test/hw firmware, Pico SDK)
 /build-hw
 /build-hw.log
+
+.*/
