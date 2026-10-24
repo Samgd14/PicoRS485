@@ -415,28 +415,41 @@ int PicoRS485_t<N>::take_burst(uint8_t *out, size_t max) {
     --rx_ready_count_;
     if (rx_ready_count_ != 0) rx_ready_[0] = rx_ready_[1];
 
-    // Sampled bits are left-justified: bit 0 is the first data bit, the stop bit sits above
-    // data + parity. Read out of the members first: out[] may alias this object
+    // Sampled bits are left-justified: data at bit 0, the stop bit above data + parity.
+    // out[] may alias this object; everything below is read before the loop writes it.
     const uint32_t data_bits   = pkt_.data_bits;
     const uint32_t parity_bits = pkt_.parity_bits;
     const uint32_t shift       = 32u - isr_bits_;   // isr_bits_ is in [6, 10] here
     const uint32_t data_mask   = (1u << data_bits) - 1u;
-    const uint32_t parity_mask = 1u << data_bits;
     const uint32_t stop_mask   = 1u << (data_bits + parity_bits);
-    const bool     want_parity = parity_bits != 0;
     const uint32_t *const table = char_table_;
     // Written by the RX channel, so read through a volatile view
     const volatile uint32_t *const staged = rx_staging_[buffer];
+
+    // Count the framing and parity errors
     uint32_t framing = 0, parity = 0;
-    for (uint16_t i = 0; i < chars; ++i) {
-        const uint32_t bits = staged[i] >> shift;
-        if ((bits & stop_mask) == 0) ++framing;
-        if (want_parity) {
-            // The expected parity sits at 1 + data_bits in this byte's table entry.
-            const uint32_t expected = (table[bits & data_mask] >> (1u + data_bits)) & 1u;
-            if (((bits & parity_mask) != 0) != (expected != 0)) ++parity;
+    if (parity_bits == 0) {
+        // No parity bit, only check the stop bit
+        for (uint16_t i = 0; i < chars; ++i) {
+            const uint32_t bits = staged[i] >> shift;
+            if ((bits & stop_mask) == 0) ++framing;
+            if (i < max) out[i] = (uint8_t)(bits & data_mask);
         }
-        if (i < max) out[i] = (uint8_t)(bits & data_mask);
+    } else {
+        // Parity and stop bit, both are checked in one compare
+        const uint32_t parity_mask = 1u << data_bits;
+        const uint32_t valid_mask  = (1u << isr_bits_) - 1u;
+        for (uint16_t i = 0; i < chars; ++i) {
+            const uint32_t bits     = staged[i] >> shift;
+            const uint32_t byte     = bits & data_mask;
+            const uint32_t expected = (table[byte] >> 1) & valid_mask;
+            if (bits != expected) {
+                // If there is a parity/framing error, identify which
+                if ((bits & stop_mask) == 0) ++framing;
+                if (((bits ^ expected) & parity_mask) != 0) ++parity;
+            }
+            if (i < max) out[i] = (uint8_t)byte;
+        }
     }
     framing_errors_ += framing;
     parity_errors_  += parity;

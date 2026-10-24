@@ -68,6 +68,7 @@ void suite_receive() {
                                  {0x141, 0x041, 0x042, 0x043}, 4, {0x41, 0x41, 0x42, 0x43}, 4, 3, 0},
             {"8E1 good",         {8, 1, 1, 8, 16, true}, 10, {0x203}, 1, {0x03}, 1, 0, 0},
             {"8E1 parity wrong", {8, 1, 1, 8, 16, true}, 10, {0x303}, 1, {0x03}, 1, 0, 1},
+            {"8E1 stop low",     {8, 1, 1, 8, 16, true}, 10, {0x003}, 1, {0x03}, 1, 1, 0},
             {"8O1 good",         {8, 1, 1, 8, 16, false},  10, {0x303}, 1, {0x03}, 1, 0, 0},
             {"8O1 parity wrong", {8, 1, 1, 8, 16, false},  10, {0x203}, 1, {0x03}, 1, 0, 1},
             {"8E1 3 chars, every parity wrong",
@@ -77,6 +78,11 @@ void suite_receive() {
             {"7E1 good",         {7, 1, 1, 8, 16, true}, 9,  {0x155}, 1, {0x55}, 1, 0, 0},
             {"7E1 parity wrong", {7, 1, 1, 8, 16, true}, 9,  {0x1D5}, 1, {0x55}, 1, 0, 1},
             {"5N1 good",         {5, 0, 1, 8, 16},              6,  {0x03F}, 1, {0x1F}, 1, 0, 0},
+            {"8E1 stop low and parity wrong",
+                                 {8, 1, 1, 8, 16, true}, 10,
+                                 {0x103}, 1, {0x03}, 1, 1, 1},
+            {"8N2 good",         {8, 0, 2, 8, 16},              9,  {0x141}, 1, {0x41}, 1, 0, 0},
+            {"8N2 stop bit low", {8, 0, 2, 8, 16},              9,  {0x041}, 1, {0x41}, 1, 1, 0},
         };
         for (const rx_row &r : rows) {
             CASE("receive: RX %s", r.what);
@@ -144,6 +150,30 @@ void suite_receive() {
         end_burst();
         CHECK_EQ(ch.dropped_burst_count(), 2);
         CHECK_EQ(ch.receive_for(got, sizeof(got), 5000), (int)PicoRS485::err_timeout);
+    }
+    // A full-length burst through the parity path, where the compare, the mask and the
+    // table lookup all run: an index or shift error there shows up as a shifted payload
+    // or a counter that moves, at the burst limit.
+    reset_stubs();
+    {
+        PicoRS485 ch(0, 1, 2, 3);
+        bring_up(ch, pio0, 9600, {8, 1, 1, 8, 16, true});
+        CASE("receive: a 256-character burst with character 100 missing its stop bit");
+        for (uint32_t i = 0; i < PicoRS485::max_burst_bytes; ++i) {
+            const uint32_t byte = i & 0xFFu;
+            const uint32_t parity = (uint32_t)__builtin_parity(byte);
+            deliver_rx(pio0, SM_RX,
+                       byte | (parity << 8) | (i == 100 ? 0u : (1u << 9)), 10);
+        }
+        end_burst();
+        uint8_t got[PicoRS485::max_burst_bytes] = {};
+        CHECK_EQ(ch.receive(got, sizeof(got)), (int)PicoRS485::max_burst_bytes);
+        CHECK_EQ(ch.framing_error_count(), 1);
+        CHECK_EQ(ch.parity_error_count(), 0);
+        for (uint32_t i = 0; i < PicoRS485::max_burst_bytes; ++i) {
+            CASE("receive: 256-char burst, byte %u", (unsigned)i);
+            CHECK_EQ(got[i], i & 0xFFu);
+        }
     }
     // A silence flag with nothing behind it publishes nothing and drops nothing.
     reset_stubs();

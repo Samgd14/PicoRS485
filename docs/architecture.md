@@ -106,11 +106,17 @@ finishes while up to eight characters are still in the transmit FIFO, so "DMA do
 4. When the activity pin has been idle for `rx_idle_bits_thresh` bit times, the timer raises flag 1, which is routed to `PIO_IRQ_NUM(pio, 0)`. This runs `service_irq_()`.
 5. The handler stops the channel, reads `write_addr` until it stops moving, derives `chars` from how far it moved into the active staging buffer, and appends that buffer's index to `rx_ready_`.
 6. It then arms a buffer that is **not queued** and returns.
-7. `receive()` / `receive_for()` wait on `rx_ready_count_`, then `take_burst()` gives the filled buffer to the higher layer.
+7. `receive()` / `receive_for()` wait on `rx_ready_count_`, then `take_burst()` gives the filled buffer to the higher layer. Without a parity bit, only the stop bit is checked. With a parity bit, each character is compared against its framing table entry (`char_table_[b] >> 1`, masked to `isr_bits`), so checking a character's validity only costs a single compare. The individual stop-bit and parity tests only run when the two differ.
 
 Step 5 reads the pointer until it stops moving because RP2040-E13 lets the abort return with a write still in flight, which can leave a single read one word short. The stop itself is the SDK's `dma_channel_cleanup()`, which clears the enable bit before aborting.
 
-`take_burst()` masks the channel's own interrupt while it pops the queue and reads the staging buffer, so the handler cannot re-arm the buffer underneath it. That mask does not stop the RX DMA, so an idle flag raised inside the window is serviced with whatever the DMA has taken by then: a burst that started in the meantime has its first characters counted with the burst the flag belonged to, and the rest of it is published as another burst. The window is the length of the unpack (about 20 us at 125 MHz for a full buffer) so it takes back-to-back traffic to hit, and nothing here detects it. One flag marks the end of the burst it belongs to; it is not a promise that one flag is one published burst.
+`take_burst()` masks the channel's own interrupt while it pops the queue and reads the staging buffer. That stops the handler re-arming the buffer underneath it, and nothing else.
+
+The mask does not stop the RX DMA, so an idle flag raised inside the window is serviced with whatever the DMA has taken by then. A burst that started in the meantime is split: its first characters are counted with the burst the flag belonged to, and the rest is published as a burst of its own.
+
+The window is the length of the unpack (22 cycles per character at 8N1) so only back-to-back traffic reaches it, and nothing detects it when it does.
+
+One flag marks the end of the burst it belongs to, but that doesn't mean there is only one burst per flag.
 
 ## Buffers and the queue
 

@@ -132,7 +132,11 @@ A burst that owes a callback holds the slot until it has been reported, so a rep
 
 **Receive.** One DMA channel stays armed with the staging buffer's capacity, and it is the only thing that reads the receive FIFO for data. In neither direction does anything per character touch the CPU. The idle timer's flag is the delimiter: the handler stops the channel, publishes what arrived and re-arms, and `receive()` does the unpacking, so the interrupt stays short. A flag with nothing behind it is noise; a character still in the FIFO means the DMA fell behind, and that is a lost burst rather than a truncated one.
 
-The receiver shifts right, so the sampled bits are left-justified and the byte is `word >> (32 - isr_bits_)`. The SDK's own UART RX example reads the byte from the uppermost byte of the FIFO, which is where that bit layout is pinned down. Each character's stop bit and parity bit are checked on the way past and counted, and neither rejects the character. The expected parity is not recomputed: it is read back out of the same framing table the transmitter built, so the two directions cannot disagree about the convention.
+The receiver shifts right, so the sampled bits are left-justified and a character's byte is `word >> (32 - isr_bits_)`.
+
+The stop bit and the parity bit are checked as each character is unpacked and counted separately. Neither rejects the character: a corrupt byte still reaches the caller, and the two counts are the only record of it.
+
+The expected parity is not recomputed. It is read back out of the same framing table the transmitter built, so the two directions cannot disagree about the convention. With a parity bit, the whole character is compared against that entry, and a valid one costs a single compare; the stop and parity tests only run when it differs. Without parity there is nothing but the stop bit to check, and that single test stays.
 
 ## Why the length comes from the write pointer
 

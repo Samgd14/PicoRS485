@@ -48,13 +48,13 @@ $M = @(
         if (pkt.parity_bits != 0) {
             uint32_t parity = (uint32_t)__builtin_parity(byte);
 '@ }
+  # The two masks every framing shares; the parity mask lives inside the parity branch and
+  # is m45's business.
   @{ n='m02-rx-masks-hardcoded-8bit'; o=@'
     const uint32_t data_mask   = (1u << data_bits) - 1u;
-    const uint32_t parity_mask = 1u << data_bits;
     const uint32_t stop_mask   = 1u << (data_bits + parity_bits);
 '@; e=@'
     const uint32_t data_mask   = 0xFFu;
-    const uint32_t parity_mask = 1u << 8;
     const uint32_t stop_mask   = 1u << data_bits;
 '@ }
   @{ n='m03-receive_for-always-times-out'; o=@'
@@ -81,11 +81,7 @@ int PicoRS485::receive_timed(uint8_t *out, size_t max, uint32_t timeout_us, bool
     channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
     channel_config_set_read_increment(&c, true);
 '@ }
-@{ n='m08-parity-check-runs-without-parity'; o=@'
-        if (want_parity) {
-'@; e=@'
-        if (true) {
-'@ }
+@{ n='m08-no-parity-takes-the-parity-path'; o='    if (parity_bits == 0) {'; e='    if (false) {' }
   @{ n='m09-send-rejects-len-equal-max'; o='    if (data == nullptr || len == 0 || len > max_packet_bytes) return err_argument;'; e='    if (data == nullptr || len == 0 || len >= max_packet_bytes) return err_argument;' }
   @{ n='m10-compute-clock-writes-sys_hz-on-failure'; o='        if (baudrate == 0 || (uint64_t)baudrate * pio_cycles_per_bit > sys_hz) return false;'; e=@'
     out.sys_hz = sys_hz;
@@ -431,6 +427,35 @@ void PicoRS485::irq_handler() {
 '@; e=@'
 
 '@ }
+  # ---- pass 1: the framed-word compare in take_burst() -----------------------
+  # A mask narrower than isr_bits drops the expected parity bit, so every character
+  # with a high parity bit is counted as a parity error.
+  @{ n='q01-valid-mask-narrowed-to-data'; o='        const uint32_t valid_mask  = (1u << isr_bits_) - 1u;'; e='        const uint32_t valid_mask  = (1u << data_bits) - 1u;' }
+  # Indexing the framing table with the unmasked sample word reads past its 256 entries.
+  # Fault-class: what the row reports is whatever the out-of-bounds read happens to return,
+  # so the kill depends on layout and compiler rather than on an assertion. Only a sanitiser
+  # or review settles it; do not count this row as pinned coverage.
+  @{ n='q02-expected-from-unmasked-index'; o='        const uint32_t expected = (table[byte] >> 1) & valid_mask;'; e='        const uint32_t expected = (table[bits] >> 1) & valid_mask;' }
+  # else-if loses the second count for a character that is wrong in both ways.
+  @{ n='q03-wrong-twice-counted-once'; o=@'
+                if ((bits & stop_mask) == 0) ++framing;
+                if (((bits ^ expected) & parity_mask) != 0) ++parity;
+'@; e=@'
+                if ((bits & stop_mask) == 0) ++framing;
+                else if (((bits ^ expected) & parity_mask) != 0) ++parity;
+'@ }
+  # The two counters must stay independent: a stop-low character with correct parity counts
+  # framing only. Killed by the "8E1 stop low" decode row.
+  @{ n='q04-parity-counted-on-any-mismatch'; o=@'
+                if ((bits & stop_mask) == 0) ++framing;
+                if (((bits ^ expected) & parity_mask) != 0) ++parity;
+'@; e=@'
+                if ((bits & stop_mask) == 0) ++framing;
+                ++parity;
+'@ }
+  # The mask only keeps an 8N2/8E2 burst on the compare path; it changes no count, so this
+  # one is expected to survive and is recorded rather than closed (plan §5.6).
+  @{ n='q05-valid-mask-dropped'; o='        const uint32_t expected = (table[byte] >> 1) & valid_mask;'; e='        const uint32_t expected = table[byte] >> 1;' }
 )
 # Obsolete: the code these mutated is gone (the hardware terms, the poll, the in-header
 # thunk, the precedence guard - see test/README.md).
@@ -486,7 +511,12 @@ foreach ($m in $M) {
     }
     $exe = Join-Path $mutDir ($m.n + '.exe')
     $gxxArgs = @('-std=c++17','-w','-O1',
+                 # Same flag as run_tests.ps1: sections_ownership links a second instantiation.
+                 '-DPICO_RS485_EXTRA_SIZE=32',
                  '-I', (Join-Path $root 'include'), '-I', (Join-Path $root 'test/stub'),
+                 # The driver falls back to "rs485_instantiations_default.h" next to itself, which a
+                 # mutant in test/build/mutants is not, so src/ has to be on the include path.
+                 '-I', (Join-Path $root 'src'),
                  '-o', $exe) + $suite + @($mf)
     $b = Invoke-Capture -File 'g++' -Argv $gxxArgs -TimeoutMs 120000
     if ($b.code -ne 0) {
@@ -508,3 +538,12 @@ foreach ($m in $M) {
     }
 }
 $rows | ForEach-Object { "{0}`t{1}`t{2}" -f $_.name, $_.result, $_.detail }
+
+# A mutant that does not compile is a broken harness, not a result, and used to hide behind an
+# exit code of 0 while every single row read BUILD-FAILED. SURVIVED and NOT-APPLIED stay
+# reportable: a survivor is a test gap to read, and a stale anchor is the corpus's own debt.
+if ($rows | Where-Object { $_.result -eq 'BUILD-FAILED' }) {
+    Write-Host 'BUILD-FAILED mutant(s): the corpus is broken, not the driver.'
+    exit 1
+}
+exit 0

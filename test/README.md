@@ -15,7 +15,7 @@ The suite runs under a 120 s bound, so a hang fails the run instead of blocking 
 
 ## The five checks
 
-1. **The host suite** - 2220 checks with the default stub (2224 in the base-0 run below).
+1. **The host suite** - 2499 checks with the default stub (2503 in the base-0 run below).
 2. **The base-0 suite** - the same suite built *and run* with `-DPICO_PIO_USE_GPIO_BASE=0`, so the RP2040/RP2350A branch of the pin handling is executed rather than only compiled.
 3. **The RP2040 / RP2350A build** - `src/PicoRS485.cpp` compiled (`-fsyntax-only`) with `PICO_PIO_USE_GPIO_BASE=0`.
 4. **The `.pio` helpers** - the four `% c-sdk` blocks are extracted from `src/rs485.pio` and compiled at both pin-mask bases, so the helper code the suite replaces with recorders is still type-checked, including their `int` returns.
@@ -29,7 +29,7 @@ Every section sets a `CASE` label and every table row re-sets it, so a failure n
 
 The categories cover construction, `init()` and each of its error codes, `set_packet_config()` / `get_packet_config()`, the clock and packet validators, the clock derivation against the pre-refactor maths at 18 rates x 6 system clocks through both entry points, the GPIO-base pin windows and the 64-bit pin mask, teardown, the DMA paths (framing table, a burst clocked out and decoded, silence-delimited receives, queue overflow, the length boundary, timeouts, the in-flight refusals), and the transmit-completion contract.
 
-Framing is checked as whole expected words - start bit, data LSB first, parity, stop bits and nothing above - in a table over 8N1/8E1/8O1/7E2/7N1/7E1/5N1/5E1, including parity computed over the masked byte. Decoding has a table of its own over 8N1/8E1/8O1/7N1/7E1/5N1, each row carrying its expected bytes and its expected framing and parity counts. A canary past a short receive buffer pins that a burst is truncated to what the caller offered while the return stays the full length.
+Framing is checked as whole expected words - start bit, data LSB first, parity, stop bits and nothing above - in a table over 8N1/8E1/8O1/7E2/7N1/7E1/5N1/5E1, including parity computed over the masked byte. Decoding has a table of its own over 8N1/8E1/8O1/7N1/7E1/5N1/8N2, each row carrying its expected bytes and its expected framing and parity counts. A canary past a short receive buffer pins that a burst is truncated to what the caller offered while the return stays the full length.
 
 The validator's accepted space was also swept exhaustively, outside this suite: data 0-9 x parity 0-2 x stop 0-3 x gap 0-33 x threshold 0-65 x even/odd, 538,560 combinations, of which 44,144 are accepted - 22,072 framing tuples, each counted twice because the parity mode is ignored without a parity bit. The sweep is `test/build/review/rx_idle_sweep.cpp` (git-ignored), so it does not run here.
 
@@ -68,6 +68,8 @@ These are places where a wrong driver could pass, or where the model is simpler 
 - `release()`'s registry entry (`instances_`) is not read directly. The suite observes that the dead block's handler is gone and that its flag reaches nothing, but not the entry itself.
 - The `init()` order - drain, restart, rewind, arm, route - is pinned by call counts, by the machine and block each call names, and by the jump target, not by their interleaving. The drain-before-restart half is pinned more strongly, because the stalled-autopush section (43) models the stalled push that makes the order matter.
 - **A defensive guard that no input can reach is invisible here.** `take_burst()` refuses a queue index the handler cannot have written, and the mutation that removes that check survives. It is recorded as defensive rather than as tested. `burst_duration_us()`'s length clamp is the other kind: only a 64-bit host can reach it, and section 33 pins it there with two lengths chosen so that a wrapped product would show.
+- **A read past the framing table is a fault, not a count.** The `q02` mutant indexes `char_table_` with the unmasked sample word; it dies on this layout, but what it returns is whatever the neighbouring bytes hold, so only a sanitiser or review settles it. Do not read that row as pinned coverage.
+- **A stamp also written at `send()` is not visible here.** Section 50 pins that the end-of-burst interrupt writes `last_sent_at_us_`; it cannot see an additional write in `send()`, because the interrupt overwrites it before any assertion reads the value. The only visible difference is a read taken between `send()` and the interrupt, which no test does.
 - **`release()`'s teardown ordering is not observable.** The registry entry is cleared before the flags and the handler, so an interrupt arriving mid-teardown cannot still service the instance. The suite, however, runs the handler only when the test calls it, so a mutation that moves the clear to the end of the block is not caught.
 - The `.pio` check is a compile check: an emptied helper body still passes. Doxygen parses `include/PicoRS485.h` only.
 
@@ -124,7 +126,7 @@ The firmware is configured for RP2040 (`-DPICO_BOARD=pico`). The RP2350 code pat
 
 ## The mutation corpus
 
-`test/mutation_corpus.ps1` regenerates mutants by text substitution on the driver and the header, compiles each against the host suite, and reports KILLED, SURVIVED, NOT-APPLIED or HANG. It runs every mutant with the Windows error dialog suppressed. A few of them fault on purpose.
+`test/mutation_corpus.ps1` regenerates mutants by text substitution on the driver and the header, compiles each against the host suite, and reports KILLED, SURVIVED, NOT-APPLIED or HANG. It runs every mutant with the Windows error dialog suppressed. A few of them fault on purpose. It exits non-zero if any mutant fails to build, because that is a broken harness rather than a result.
 
 Two things to expect. Some anchors describe code that no longer exists and report NOT-APPLIED. That is the corpus's own debt, not a gap in the suite. A few mutants are equivalent: the suite cannot kill them because the mutation has no observable effect. That is worth checking before treating a survivor as a missing test.
 
