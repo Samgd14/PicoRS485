@@ -106,7 +106,7 @@ The one late cycle, at 163 µs against the recorded run's zero, is most likely t
 
 `late` is **1 in the first window after a flash and 0 in every window after it**, always at cycle 1. An instrumented firmware shows exactly one slow exchange per boot, the first one, at 292 µs against a 38 µs mean; after that the schedule resyncs and the remaining cycles are paced to the microsecond. `max ... us whole run` is a whole-run field, not a window one: a single occurrence keeps printing in every later dump until the next flash, which makes it look like a standing fault when it is one event at boot.
 
-**`period=0` is not a soak setting.** Running the master back to back reached 21855 exchanges/s with the driver still untouched: dropped, framing and parity zero, and no wrong-core report. That is worth having: the receiver neither loses nor mis-frames a burst under the hardest pacing the bench can produce. The bench's own protocol, however, does not survive it. The master re-sends before the slave's reply has landed, so `stale` rose to 240012 of 240955, and the slave was left a reply behind. The *next* run at the recorded setting then reported `good 941` until the slave was reset. That is a property of an unpaced exchange rather than of the driver, and the recorded configuration is the paced one. Its one use is pricing a CPU-side change, because there the exchange rate is CPU-bound rather than paced. That is how the RAM question below was priced, and the slave wants a reset afterwards.
+**`period=0` is not a soak setting.** Running the master back to back reached **21,855** exchanges/s with the driver as it stood before the 2026-10-24 unpack and DMA changes, at the default 8N1 framing: dropped, framing and parity zero, and no wrong-core report. The 8E1 pair those changes were priced on measures **20,641** now against **18,335** for the pre-change driver — +12.6%, at a framing one bit longer per character, with every counter zero. The 8N1 back-to-back rate now measures **21,723** (217,232 of 217,232 good, 217,835 requests on the slave, every counter zero) against 21,855 recorded before the changes. Those two figures come from different builds and days, so the half percent between them measures the bench's history, not the change: the controlled A/B exists only at 8E1. On mechanism the DMA change removes one configure per `send()`, which is framing-independent, so 8N1 should have gained like 8E1; that the recorded 21,855 does not show it is why the 8N1 baseline is treated as unreproduced rather than the change as ineffective. That is worth having: the receiver neither loses nor mis-frames a burst under the hardest pacing the bench can produce. The bench's own protocol, however, does not survive it. The master re-sends before the slave's reply has landed, so `stale` rose to 240012 of 240955, and the slave was left a reply behind. The *next* run at the recorded setting then reported `good 941` until the slave was reset. That is a property of an unpaced exchange rather than of the driver, and the recorded configuration is the paced one. Its one use is pricing a CPU-side change, because there the exchange rate is CPU-bound rather than paced. That is how the RAM question below was priced, and the slave wants a reset afterwards.
 
 ## The same bench at 200 MHz
 
@@ -134,15 +134,16 @@ Cortex-M0+, `-O3`, SDK 2.3.1, `arm-none-eabi-g++` 15.2.1, with the flags the com
 
 | symbol | bytes |
 |---|---|
-| `rx_done_isr` | 752 |
-| `service_irq_` | 104 |
-| `tx_done_isr` | 72 |
-| the payload `PICO_RS485_ISR_IN_RAM` moves | **928** |
-| `take_burst` | 416 |
-| `arm_receive` | 132 |
-| `burst_duration_us` | 152 |
-| `rx_rewind` | 64 |
-| `is_core_ok_` | 40 |
+| `rx_done_isr` | 600 |
+| `service_irq_` | 100 |
+| `tx_done_isr` | 88 |
+| the payload `PICO_RS485_ISR_IN_RAM` moves | **788** |
+| `take_burst` | 540 |
+| `arm_receive` | 144 |
+| `configure_tx_dma` | 96 |
+| `burst_duration_us` | 200 |
+| `rx_rewind` | 72 |
+| `is_core_ok_` | 52 |
 | `pico_rs485_core_violation` | 4 |
 
 The object holds every member of the instantiation, including the inline ones, as a weak symbol, so its total is not what a firmware keeps. The SDK builds with `-ffunction-sections --gc-sections` and discards whatever nothing calls.
