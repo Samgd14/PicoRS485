@@ -41,6 +41,9 @@ void dma_channel_unclaim(uint channel);
 void dma_channel_configure(uint channel, const dma_channel_config *config,
                            volatile void *write_addr, const volatile void *read_addr,
                            uint transfer_count, bool trigger);
+void dma_channel_set_read_addr(uint channel, const volatile void *read_addr, bool trigger);
+void dma_channel_set_transfer_count(uint channel, uint32_t transfer_count, bool trigger);
+void dma_channel_start(uint channel);
 void dma_channel_cleanup(uint channel);
 void dma_channel_abort(uint channel);
 bool dma_channel_is_busy(uint channel);

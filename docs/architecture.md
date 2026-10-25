@@ -86,7 +86,7 @@ Two flags are routed to the CPU: flag 0 is the TX machine's own IRQ, raised as D
 
 1. `send(data, len)` is the entry point. It returns an error if the channel is inert, the caller is on the wrong core, `data` is null, `len` is 0 or over `max_burst_bytes`, or if a burst is in flight.
 2. Each byte is looked up in `char_table_[]` and written to `tx_scratch_`.
-3. One DMA channel is configured and triggered to move `len` words from `tx_scratch_` to `&pio->txf[sm_tx]`, paced by the transmitter's TX DREQ.
+3. The transmit channel is programmed once, by `init()`: 32-bit words from `tx_scratch_` to `&pio->txf[sm_tx]`, paced by the transmitter's TX DREQ. A burst then sets the source, length, and the trigger; the count write sets the reload value, and the trigger is what starts the transfer.
 4. The state machine pulls a word and shifts it out. The FIFO is 8 deep and the DMA refills it as it drains, so the burst streams without the CPU.
 5. Once the word is done sending, the TX PIO raises flag 4. The gap timer sees flag 4, counts `tx_gap_bits` steps of one bit time each, and raises flag 5, which releases the transmitter for the next word.
 6. Once the last word is reached, the PIO releases DE, and raises flag 0. This triggers `tx_done_isr()`, which marks the burst as sent and calls the user callback.

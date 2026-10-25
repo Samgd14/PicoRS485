@@ -591,6 +591,14 @@ private:
     void arm_receive(uint8_t buffer);
 
     /**
+     * @brief Set the configuration for the TX DMA channel.
+     * 
+     * Configures data size, read/write increment, and DREQ.
+     * The channel is not started here.
+     */
+    void configure_tx_dma();
+
+    /**
      * @brief Waits for a burst, with or without a bound, and unpacks it.
      * @param out        Receives the data bytes of the burst, up to @p max of them.
      * @param max        Capacity of @p out; 0 asks for the length alone.

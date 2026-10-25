@@ -115,6 +115,7 @@ int PicoRS485_t<N>::init(PIO pio, const pico_rs485_clock_config &clk, const pico
         release();
         return err_no_dma;
     }
+    configure_tx_dma();
     arm_receive(rx_active_);
 
     // From here the helpers drive the pins through the PIO, so the channel owns them.
@@ -348,13 +349,10 @@ int PicoRS485_t<N>::send(const uint8_t *data, size_t len, pico_rs485_sent_callba
     tx_user_     = user;
     ++tx_burst_id_;
 
-    // Configure the DMA channel to the TX FIFO and enable it
-    dma_channel_config c = dma_channel_get_default_config(tx_dma_);
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
-    channel_config_set_read_increment(&c, true);
-    channel_config_set_write_increment(&c, false);
-    channel_config_set_dreq(&c, PIO_DREQ_NUM(pio_, sm_tx, true));
-    dma_channel_configure(tx_dma_, &c, &pio_->txf[sm_tx], tx_scratch_, len, true);
+    // Only reprogram source and length, and start the DMA (other fields are constant)
+    dma_channel_set_read_addr(tx_dma_, tx_scratch_, false);
+    dma_channel_set_transfer_count(tx_dma_, (uint32_t)len, false);
+    dma_channel_start(tx_dma_);
     return ok;
 }
 
@@ -465,6 +463,17 @@ bool PicoRS485_t<N>::is_queued_at(uint8_t buffer, uint8_t count) const {
         if (rx_ready_[i] == buffer) return true;
     }
     return false;
+}
+
+template <size_t N>
+void PicoRS485_t<N>::configure_tx_dma() {
+    // Setup the DMA channel to transfer from the scratch buffer to the PIO's TX FIFO
+    dma_channel_config c = dma_channel_get_default_config(tx_dma_);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
+    channel_config_set_dreq(&c, PIO_DREQ_NUM(pio_, sm_tx, true));
+    dma_channel_configure(tx_dma_, &c, &pio_->txf[sm_tx], tx_scratch_, 0, false);
 }
 
 template <size_t N>

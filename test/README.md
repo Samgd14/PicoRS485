@@ -15,7 +15,7 @@ The suite runs under a 120 s bound, so a hang fails the run instead of blocking 
 
 ## The five checks
 
-1. **The host suite** - 2499 checks with the default stub (2503 in the base-0 run below).
+1. **The host suite** - 2519 checks with the default stub (2523 in the base-0 run below).
 2. **The base-0 suite** - the same suite built *and run* with `-DPICO_PIO_USE_GPIO_BASE=0`, so the RP2040/RP2350A branch of the pin handling is executed rather than only compiled.
 3. **The RP2040 / RP2350A build** - `src/PicoRS485.cpp` compiled (`-fsyntax-only`) with `PICO_PIO_USE_GPIO_BASE=0`.
 4. **The `.pio` helpers** - the four `% c-sdk` blocks are extracted from `src/rs485.pio` and compiled at both pin-mask bases, so the helper code the suite replaces with recorders is still type-checked, including their `int` returns.

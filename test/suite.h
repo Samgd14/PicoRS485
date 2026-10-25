@@ -241,6 +241,7 @@ inline int       g_abort_while_enabled = 0;     // aborts that left EN set (RP23
 
 
 inline int       g_configure_live = 0;          // reconfigures of a channel with work left
+inline int       g_dma_configure_calls = 0;     // dma_channel_configure() calls
 
 
 inline int       g_fifo_clears = 0;             // FIFO flushes, so init/recovery are visible

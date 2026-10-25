@@ -456,6 +456,20 @@ void PicoRS485::irq_handler() {
   # The mask only keeps an 8N2/8E2 burst on the compare path; it changes no count, so this
   # one is expected to survive and is recorded rather than closed (plan §5.6).
   @{ n='q05-valid-mask-dropped'; o='        const uint32_t expected = (table[byte] >> 1) & valid_mask;'; e='        const uint32_t expected = table[byte] >> 1;' }
+  # ---- pass 2: the transmit channel programmed once -------------------------
+  # Reprogramming the channel per burst still works, so only the call counter sees it.
+  @{ n='r01-tx-configure-per-burst'; o=@'
+    dma_channel_set_read_addr(tx_dma_, tx_scratch_, false);
+    dma_channel_set_transfer_count(tx_dma_, (uint32_t)len, false);
+    dma_channel_start(tx_dma_);
+'@; e=@'
+    dma_channel_config c = dma_channel_get_default_config(tx_dma_);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
+    channel_config_set_dreq(&c, PIO_DREQ_NUM(pio_, sm_tx, true));
+    dma_channel_configure(tx_dma_, &c, &pio_->txf[sm_tx], tx_scratch_, len, true);
+'@ }
 )
 # Obsolete: the code these mutated is gone (the hardware terms, the poll, the in-header
 # thunk, the precedence guard - see test/README.md).

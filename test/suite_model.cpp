@@ -472,6 +472,7 @@ void dma_channel_configure(uint ch, const dma_channel_config *c, volatile void *
     // A channel with work left that is still enabled must not be reprogrammed: the
     // driver is supposed to stop it first.
     if (d.enable && d.count > 0) ++g_configure_live;
+    ++g_dma_configure_calls;
     d.size = (int)c->data_size;
     d.read  = (uint32_t *)(uintptr_t)read_addr;
     d.write = (uint32_t *)(uintptr_t)write_addr;
@@ -491,6 +492,30 @@ void dma_channel_configure(uint ch, const dma_channel_config *c, volatile void *
             g_raise_idle_on_arm = false;      // one-shot
         }
     }
+}
+
+
+// A plain register write sets the reload value; only a trigger starts a transfer, and a
+// channel starts only when it is enabled. Modelled that way so a burst that forgets the
+// enable, or trusts the count write to start it, fails here rather than on the bench.
+void dma_channel_set_read_addr(uint ch, const volatile void *read_addr, bool trigger) {
+    dma_state &d = g_dma[ch];
+    if (d.enable && d.count > 0) ++g_configure_live;
+    d.read = (uint32_t *)(uintptr_t)read_addr;
+    if (trigger && d.enable && d.count != 0) d.busy = true;
+}
+
+void dma_channel_set_transfer_count(uint ch, uint32_t count, bool trigger) {
+    dma_state &d = g_dma[ch];
+    if (d.enable && d.count > 0) ++g_configure_live;
+    d.count = count;
+    d.hw.transfer_count = count;
+    if (trigger && d.enable && count != 0) d.busy = true;
+}
+
+void dma_channel_start(uint ch) {
+    dma_state &d = g_dma[ch];
+    if (d.enable && d.count != 0) d.busy = true;
 }
 
 
@@ -682,6 +707,7 @@ void sent_then_send(void *user, uint32_t) {
 
 
 void reset_stubs() {
+    g_dma_configure_calls = 0;
     g_add_calls = 0; g_add_fail_at = -1; g_clear_mem = 0;
     g_memory_cleared = false;
     g_pindir_ok = true; g_sm_ok = true;

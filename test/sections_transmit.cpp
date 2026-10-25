@@ -38,6 +38,33 @@ void suite_transmit() {
         CHECK_EQ(ch.burst_duration_us(4), 92);     // 4 * (10 + 8 + 3) bits at 921600
     }
 
+    // --- 30b. transmit: the channel is programmed once -----------------------
+    CASE("transmit: a second burst rewrites the source and the length");
+    reset_stubs();
+    {
+        PicoRS485 ch(0, 1, 2, 3);
+        bring_up(ch);
+        CHECK_EQ(g_dma_configure_calls, 2);        // both channels, once, at init
+        uint8_t first[1] = {0xAA};
+        CHECK_EQ(ch.send(first, 1), (int)PicoRS485::ok);
+        drain_tx(pio0, SM_TX);
+        raise_pio_irq(pio0, k_tx_done_irq);
+        CHECK_EQ(g_dma_configure_calls, 2);        // a burst reprograms nothing
+        uint8_t second[3] = {0x11, 0x22, 0x33};
+        CHECK_EQ(ch.send(second, 3), (int)PicoRS485::ok);
+        for (int i = 0; i < 3; ++i) {
+            uint32_t word = 0;
+            CHECK(run_tx(pio0, SM_TX, &word));
+            const uint32_t want = ((uint32_t)second[i] << 1) | (1u << 9)
+                                | (i == 2 ? (1u << 10) : 0u);   // 8N1, marker on the last
+            CHECK_EQ(word, want);
+        }
+        uint32_t spare = 0;
+        CHECK(!run_tx(pio0, SM_TX, &spare));
+        raise_pio_irq(pio0, k_tx_done_irq);
+        CHECK_EQ(g_configure_live, 0);
+    }
+
     // --- 31. transmit: the length boundary and the pacing --------------------
     CASE("transmit: the length boundary and the pacing");
     reset_stubs();
@@ -48,7 +75,7 @@ void suite_transmit() {
         CASE("transmit: a burst of exactly the maximum");
         CHECK_EQ(ch.send(big, PicoRS485::max_burst_bytes), (int)PicoRS485::ok);
         CHECK_EQ(g_dma[SM_RX].size, (int)DMA_SIZE_32);   // the receiver, by init
-        CHECK_EQ(g_dma[SM_TX].size, (int)DMA_SIZE_32);   // the transmitter, by send
+        CHECK_EQ(g_dma[SM_TX].size, (int)DMA_SIZE_32);   // the transmitter, by init
         drain_tx(pio0, SM_TX);
         // The burst is bigger than the FIFO, so a channel paced on the wrong DREQ
         // would push past it: the model counts that rather than absorbing it.
